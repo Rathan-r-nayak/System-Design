@@ -218,3 +218,103 @@ Because you *must* have **P**, when a network partition happens, you have to cho
 * **AP (Availability + Partition Tolerance):** The network breaks. You allow Node A and Node B to keep accepting reads/writes independently. They will get out of sync, but the system stays up. You sacrificed Consistency.
 
 ![alt text](image-5.png)
+
+
+## Consistency Patterns
+### 1. Strong Consistency: "Safety First"
+
+After a write completes, **every subsequent read will return that updated value**.
+
+* **How it works:** When you write data to Node A, the system immediately locks. Node A forces Node B and Node C to update their data as well. The write operation does not return a "Success" message to the user until *all* nodes have the new data.
+* **The Trade-off:** High latency. The user has to wait for network communication between all nodes to finish before they can move on.
+* **When to use it:** Financial transactions, billing systems, or any core transactional data. If you withdraw ₹10,000 from an ATM, the bank's database *must* be strongly consistent before allowing another withdrawal from a different branch.
+
+### 2. Eventual Consistency: "Speed First, Accuracy Later"
+
+After a write completes, reads might return stale data for a short period, but **eventually, all nodes will sync up and return the updated value**.
+
+* **How it works:** When you write data to Node A, Node A instantly returns a "Success" message to the user. Behind the scenes, it asynchronously sends the new data to Node B and Node C.
+* **The Trade-off:** Stale reads. If a user quickly reads from Node B before the background sync finishes, they will see the old data.
+* **When to use it:** Social media, search engine indexes, or distributed memory stores for AI agents. If you upload a new avatar, it is fine if your friends see the old avatar for an extra 5 seconds. The system remains blazing fast and highly available.
+
+### 3. Weak Consistency: "Best Effort"
+
+After a write completes, **there is no guarantee that subsequent reads will ever see the updated value** unless certain conditions are met.
+
+* **How it works:** Data is written, but the system does not try hard to ensure every node gets it. If the network drops the sync packet, the system just moves on.
+* **The Trade-off:** Data loss is acceptable and expected.
+* **When to use it:** VoIP calls, live multiplayer gaming, or real-time sensor telemetry. If a video frame drops during a live stream, you don't want the system to pause and wait for it; you just want to see the *next* frame.
+![alt text](image-6.png)
+
+
+## Availability Patterns
+### 1. Fail-Over: Protecting the "Compute" Layer
+
+Fail-over applies to the servers that do the actual work—the application logic, the web servers, the API gateways. Because these servers usually don't store permanent data, routing around a failure is mostly about directing traffic.
+
+Imagine a busy restaurant kitchen.
+
+#### i. Active-Passive (The "Understudy" Model): 
+With active-passive fail-over, heartbeats are sent between the active and the passive server on standby. If the heartbeat is interrupted, the passive server takes over the active's IP address and resumes service.
+
+* **How it works:** You have a Head Chef (Active) cooking all the meals. You also pay a Sous-Chef (Passive) to just stand there and watch. The Sous-Chef occasionally taps the Head Chef on the shoulder (the "heartbeat"). If the Head Chef collapses, the Sous-Chef immediately takes over.
+* **The Catch:** You are paying for a second chef who does absolutely nothing 99% of the time. There is also a brief delay (downtime) while the Sous-Chef figures out where the Head Chef left off.
+
+
+#### ii. Active-Active (The "Co-Chef" Model):
+In active-active, both servers are managing traffic, spreading the load between them.
+
+If the servers are public-facing, the DNS would need to know about the public IPs of both servers. If the servers are internal-facing, application logic would need to know about both servers.
+
+* **How it works:** You have two Head Chefs working side-by-side, splitting the ticket orders 50/50. If one chef collapses, the other chef simply takes on 100% of the orders.
+* **The Catch:** There is zero downtime, but if that single remaining chef isn't fast enough to handle the entire restaurant's orders by themselves, they will get overwhelmed and collapse too, bringing down the whole system.
+
+
+
+### 2. Replication: Protecting the "Data" Layer
+
+Replication applies to your databases. This is significantly harder than Fail-Over. If a web server dies, you just send the user to another web server. But if a database dies, you risk permanently losing the user's data. You have to keep multiple copies of the data synchronized.
+
+Imagine a system for updating a highly critical ledger book.
+
+#### i. Master-Slave (The "Manager and Tellers" Model):
+In this type of replication, one server is designated as the "master" and handles all write operations, while multiple "slave" servers handle read operations. If the master fails, one of the slaves can be promoted to take its place. This type of replication is simpler to set up and maintain compared to Master-Master replication.
+
+* **How it works:** Only the Manager (Master) is allowed to write new entries into the official ledger. However, every time they write something, they hand photocopies to five Tellers (Slaves). If a customer just wants to *check* their balance (a read operation), they ask a Teller. If they want to *deposit* money (a write operation), they must go to the Manager.
+* **The Catch:** This is fantastic for systems with massive amounts of reads (like reading a Twitter timeline) and fewer writes. But if the Manager dies, nobody can deposit money until a Teller is officially promoted to Manager.
+
+
+#### ii. Master-Master (The "Two Managers" Model):
+In this type of replication, multiple servers are configured as "masters," and each one can accept read and write operations. This allows for high availability and allows any of the servers to take over if one of them fails. However, this type of replication can lead to conflicts if multiple servers update the same data at the same time, so some conflict resolution mechanism is needed to handle this.
+
+* **How it works:** You have two Managers, both with their own official ledger, both accepting deposits, and constantly yelling across the room to update each other on what they just wrote.
+* **The Catch:** This provides incredible availability because either manager can handle anything. But it introduces **Conflicts**. What if Manager A and Manager B both withdraw the last $10 from the same account at the exact same millisecond before they can update each other? Resolving these "split-brain" conflicts requires very complex engineering.
+![alt text](image-7.png)
+
+
+## Background Jobs
+Background jobs in system design refer to tasks that are executed in the background, independently of the main execution flow of the system. These tasks are typically initiated by the system itself, rather than by a user or another external agent.
+
+Background jobs can be used for a variety of purposes, such as:
+- **Performing maintenance tasks:** such as cleaning up old data, generating reports, or backing up the database.
+- **Processing large volumes of data:** such as data import, data export, or data transformation.
+- **Sending notifications or messages:** such as sending email notifications or push notifications to users.
+- **Performing long-running computations:** such as machine learning or data analysis.
+
+### i. Event Driven
+Event-driven invocation uses a trigger to start the background task. Examples of using event-driven triggers include:
+
+- The UI or another job places a message in a queue. The message contains data about an action that has taken place, such as the user placing an order. The background task listens on this queue and detects the arrival of a new message. It reads the message and uses the data in it as the input to the background job. This pattern is known as asynchronous message-based communication.
+- The UI or another job saves or updates a value in storage. The background task monitors the storage and detects changes. It reads the data and uses it as the input to the background job.
+- The UI or another job makes a request to an endpoint, such as an HTTPS URI, or an API that is exposed as a web service. It passes the data that is required to complete the background task as part of the request. The endpoint or web service invokes the background task, which uses the data as its input.
+
+### ii. Schedule Driven
+Schedule-driven invocation uses a timer to start the background task. Examples of using schedule-driven triggers include:
+
+- A timer that is running locally within the application or as part of the application's operating system invokes a background task on a regular basis.
+- A timer that is running in a different application, such as Azure Logic Apps, sends a request to an API or web service on a regular basis. The API or web service invokes the background task.
+- A separate process or application starts a timer that causes the background task to be invoked once after a specified time delay, or at a specific time.
+
+### iii. Returning Results
+Background jobs execute asynchronously in a separate process, or even in a separate location, from the UI or the process that invoked the background task. Ideally, background tasks are "fire and forget" operations, and their execution progress has no impact on the UI or the calling process. This means that the calling process does not wait for completion of the tasks. Therefore, it cannot automatically detect when the task ends.
+
