@@ -318,3 +318,144 @@ Schedule-driven invocation uses a timer to start the background task. Examples o
 ### iii. Returning Results
 Background jobs execute asynchronously in a separate process, or even in a separate location, from the UI or the process that invoked the background task. Ideally, background tasks are "fire and forget" operations, and their execution progress has no impact on the UI or the calling process. This means that the calling process does not wait for completion of the tasks. Therefore, it cannot automatically detect when the task ends.
 
+
+
+## Domain Name System (DNS)
+The **Domain Name System (DNS)** is famously known as the "phonebook of the internet." Its primary job is to translate human-readable domain names (like `roadmap.sh` or `google.com`) into machine-readable IP addresses (like `142.250.190.46`) so that computers can connect to each other.
+
+However, in system design, DNS is much more than just a lookup table. It is the very **first point of contact** for any user trying to reach your application, and it is a globally distributed, highly available database that can make complex architectural decisions before a user even hits your servers.
+
+
+### 1. The DNS Resolution Journey
+
+When you type a URL into your browser, finding the IP address isn't a single step. It is a cascading fallback mechanism designed to reduce latency.
+
+1. **Browser & OS Cache:** The browser checks its own memory. If it isn't there, it checks your computer's operating system cache. If you've visited the site recently, the lookup ends here in milliseconds.
+2. **Recursive Resolver:** If the IP isn't cached locally, your computer asks a resolver (usually provided by your Internet Service Provider, or a public one like Google's `8.8.8.8`). The resolver checks its massive cache.
+3. **Root Name Server:** If the resolver doesn't know, it queries one of the 13 logical Root Servers globally. The Root server says, *"I don't know the IP, but I know who handles `.com` domains."*
+4. **TLD (Top-Level Domain) Server:** The resolver then asks the `.com` server. The TLD server says, *"I don't know the IP, but I know the specific Authoritative Server for `roadmap.sh`."*
+5. **Authoritative Name Server:** The resolver finally reaches the server where the domain's owner actually configured their DNS records (e.g., AWS Route53, Cloudflare). This server provides the exact IP address, which travels all the way back to your browser.
+
+*System Design Takeaway:* Because this 5-step process takes time (latency), DNS relies heavily on **caching** at every single level with a **TTL (Time to Live)**. If you change your server's IP address, it can take anywhere from 5 minutes to 24 hours for the new IP to propagate globally because everyone is holding onto the cached old IP.
+![alt text](image-9.png)
+![alt text](image-8.png)
+
+### 2. DNS as a Load Balancer (Advanced Routing)
+
+In modern system design, you don't just point a domain to a single IP address. You use the Authoritative Name Server to intelligently route traffic *before* it even hits your application load balancers.
+
+Here are the advanced DNS routing patterns:
+
+* **Simple Routing:** One domain points to one IP. (Fine for a small blog).
+* **Weighted Routing:** You point your domain to two different server IPs. You tell DNS to send 90% of requests to Server A, and 10% to Server B. This is perfect for safely testing a new version of your software (Canary Deployment) with a small group of real users.
+* **Latency Routing:** DNS checks where the user is, checks the latency to your various server regions, and returns the IP of the server that will respond the fastest.
+* **Geo-Location Routing:** DNS routes traffic based on the user's physical location. A user querying from Bengaluru gets the IP for your `ap-south-1` (Mumbai) cluster, while a user in New York gets the IP for your `us-east-1` (Virginia) cluster. This is crucial for both performance and data compliance laws (like GDPR).
+* **Failover Routing:** DNS constantly pings your Primary Server. If the Primary Server stops responding, DNS automatically updates itself to start returning the IP of your Backup (Passive) Server.
+
+
+## Content Delivery Networks
+A **Content Delivery Network (CDN)** is one of the easiest and most cost-effective ways to massively improve both the **performance** (latency) and **scalability** (throughput) of a system.
+
+If the Domain Name System (DNS) is the internet's phonebook, a CDN is the internet's **global supply chain**.
+
+Here is a simple analogy: Imagine you buy a pair of shoes from Amazon. If Amazon only had one warehouse in Seattle, every single customer in the world would have to wait weeks for their shoes. Instead, Amazon builds local warehouses near major cities, stocks them with the most popular shoes, and delivers them the next day.
+
+A CDN does the exact same thing, but for digital assets (Images, Videos, HTML, CSS, JavaScript).
+
+### How a CDN Works
+
+Instead of forcing every user to download your website's logo from your single **Origin Server** in New York, a CDN provider (like Cloudflare, AWS CloudFront, or Akamai) gives you access to a network of thousands of **Edge Servers** distributed globally.
+
+When a user in London visits your site, the DNS routes them to the London Edge Server. The Edge Server hands them the logo in 10 milliseconds. Your Origin Server in New York doesn't even know the interaction happened.
+
+**Why this is crucial for System Design:**
+
+1. **Lowers Latency:** Physics is undefeated. Data traveling from London to New York takes time (~90ms). Data traveling from London to London takes ~5ms.
+2. **Protects the Origin:** If your website goes viral and 1 million people visit it, your Origin Server would normally crash. With a CDN, the Edge Servers absorb 99% of that traffic, keeping your Origin Server safe and online.
+
+
+### Push CDNs vs. Pull CDNs
+
+In the roadmap, you will see CDNs divided into two primary strategies. This refers to how the data actually gets from your Origin Server onto the Edge Servers.
+
+#### 1. Push CDNs
+
+You, the developer, manually upload your files directly to the CDN.
+
+* **How it works:** Whenever you update your website, your deployment pipeline "pushes" the new images and code to the CDN. The CDN then proactively copies those files to all of its global Edge Servers.
+* **The Pros:** Content is instantly available everywhere. There is no waiting for the first user to trigger a download.
+* **The Cons:** You pay to store *everything* on the CDN, even files that nobody ever looks at.
+* **When to use it:** Small websites with a limited amount of static content, or systems where content rarely changes but must be immediately fast when it does.
+
+#### 2. Pull CDNs (Most Common)
+
+The CDN is lazy. It does absolutely nothing until a user asks for a file.
+
+* **How it works:** A user in Tokyo requests `image.png`. The Tokyo Edge Server says, *"I don't have that."* (This is a **Cache Miss**). The Tokyo Edge Server quickly pulls the image from your Origin Server in New York, serves it to the user, and *saves a copy*. The next 10,000 users in Tokyo who ask for `image.png` get the saved copy instantly. (This is a **Cache Hit**).
+* **The Pros:** You only use storage space on the CDN for files that people actually want to see. It is highly cost-effective.
+* **The Cons:** The very first user in a new region will experience high latency because they have to wait for the Edge Server to pull from the Origin.
+* **When to use it:** Large applications with millions of dynamic assets (like YouTube thumbnails, Twitter images, or e-commerce product photos).
+
+
+## Load Balancer (LB)
+If you want to scale horizontally (adding more servers to handle more throughput), you absolutely must have a **Load Balancer (LB)**.
+
+Think of a load balancer as the ultimate traffic cop for your system. When 100,000 users try to access your application, they don't connect to your servers directly. They connect to the load balancer, which then dictates exactly which backend server will process each user's request.
+
+This solves two massive system design problems:
+
+1. **Scalability:** It distributes the workload so no single server gets overwhelmed.
+2. **Availability:** It acts as a health monitor. If Server B crashes, the load balancer instantly stops sending traffic to it, routing everyone to Servers A and C instead.
+
+Here is how load balancers are categorized and configured.
+
+---
+
+### 1. Load Balancer vs. Reverse Proxy
+
+These terms are often used interchangeably because modern software (like Nginx, HAProxy, or Traefik) usually does both at the same time. However, their primary purposes are different:
+
+* **Load Balancer:** Its primary job is distributing traffic across a pool of *identical* servers to increase capacity and reliability.
+* **Reverse Proxy:** Its primary job is shielding your backend servers from the internet. It sits in front of your servers and handles tasks like SSL termination (decrypting HTTPS so your servers don't have to), caching, and routing traffic to *different* services based on the URL (e.g., sending `/api` requests to a Python backend, and `/blog` requests to a WordPress backend).
+
+### 2. Load Balancing Algorithms
+
+When a request arrives, how does the load balancer decide who gets it? You have to configure an algorithm based on your application's needs.
+
+* **Round Robin:** The simplest method. It distributes requests sequentially: Server 1, then Server 2, then Server 3, then back to Server 1.
+* *Best for:* Systems where all servers are exactly the same size and all requests take roughly the same amount of time to process.
+
+
+* **Least Connections:** The LB checks which server currently has the fewest active requests being processed and sends the new request there.
+* *Best for:* Applications where some requests take much longer than others (e.g., one user asks for a simple text file, another asks for a heavy database export). It prevents a server from getting bogged down with too many heavy tasks.
+
+
+* **IP Hash (Sticky Sessions):** The LB calculates a mathematical hash based on the user's IP address. This guarantees that User A will *always* be routed to Server 1.
+* *Best for:* Legacy applications that store user login sessions in the server's local RAM instead of a centralized database like Redis. (Note: In modern system design, we try to avoid this and build "stateless" applications).
+
+
+
+### 3. Layer 4 vs. Layer 7 Load Balancing
+
+In system design interviews and cloud architecture, you will frequently be asked at which OSI layer your load balancer operates.
+
+* **Layer 4 (Transport Layer):** * **How it works:** It routes traffic based *only* on the IP address and the TCP/UDP port. It doesn't look at the actual content of the request.
+* **Pros:** Blazing fast. Because it isn't decrypting or reading the data, it uses very little CPU and can handle millions of requests per second.
+* **Example:** AWS Network Load Balancer (NLB). Perfect for multiplayer gaming or raw database connections.
+
+
+* **Layer 7 (Application Layer):** * **How it works:** It looks *inside* the HTTP/HTTPS packet. It can read the URL path, the cookies, and the headers.
+* **Pros:** Extremely smart routing. It can send `/video` traffic to high-bandwidth servers and `/chat` traffic to high-compute servers.
+* **Example:** AWS Application Load Balancer (ALB). Slower than L4, but essential for modern microservice architectures.
+
+
+
+---
+
+### Interactive Load Balancer Simulator
+
+To see why choosing the right algorithm matters, try the simulator below.
+
+Set the algorithm to **Round Robin** and watch what happens if one server gets stuck processing a heavy task—the LB will blindly keep sending it traffic, causing a bottleneck. Then, switch to **Least Connections** to see how the LB intelligently routes around the bogged-down server.
+
+You can also simulate a health check failure by "killing" a server mid-traffic.
