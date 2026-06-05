@@ -418,10 +418,18 @@ These terms are often used interchangeably because modern software (like Nginx, 
 * **Load Balancer:** Its primary job is distributing traffic across a pool of *identical* servers to increase capacity and reliability.
 * **Reverse Proxy:** Its primary job is shielding your backend servers from the internet. It sits in front of your servers and handles tasks like SSL termination (decrypting HTTPS so your servers don't have to), caching, and routing traffic to *different* services based on the URL (e.g., sending `/api` requests to a Python backend, and `/blog` requests to a WordPress backend).
 
+* Deploying a load balancer is useful when you have multiple servers. Often, load balancers route traffic to a set of servers serving the same function.
+* Reverse proxies can be useful even with just one web server or application server.
+* Solutions such as NGINX and HAProxy can support both layer 7 reverse proxying and load balancing.
+
 ### 2. Load Balancing Algorithms
 
 When a request arrives, how does the load balancer decide who gets it? You have to configure an algorithm based on your application's needs.
+- A load balancer is a software or hardware device that keeps any one server from becoming overloaded. A load balancing algorithm is the logic that a load balancer uses to distribute network traffic between servers (an algorithm is a set of predefined rules).
+- There are two primary approaches to load balancing. Dynamic load balancing uses algorithms that take into account the current state of each server and distribute traffic accordingly. 
+- Static load balancing distributes traffic without making these adjustments. Some static algorithms send an equal amount of traffic to each server in a group, either in a specified order or at random.
 
+#### Algorithms:
 * **Round Robin:** The simplest method. It distributes requests sequentially: Server 1, then Server 2, then Server 3, then back to Server 1.
 * *Best for:* Systems where all servers are exactly the same size and all requests take roughly the same amount of time to process.
 
@@ -439,23 +447,48 @@ When a request arrives, how does the load balancer decide who gets it? You have 
 
 In system design interviews and cloud architecture, you will frequently be asked at which OSI layer your load balancer operates.
 
-* **Layer 4 (Transport Layer):** * **How it works:** It routes traffic based *only* on the IP address and the TCP/UDP port. It doesn't look at the actual content of the request.
+#### i. Layer 4 (Transport Layer):
+* **How it works:** It routes traffic based *only* on the source,destination IP address and the TCP/UDP port. It doesn't look at the actual content of the request.
 * **Pros:** Blazing fast. Because it isn't decrypting or reading the data, it uses very little CPU and can handle millions of requests per second.
 * **Example:** AWS Network Load Balancer (NLB). Perfect for multiplayer gaming or raw database connections.
 
 
-* **Layer 7 (Application Layer):** * **How it works:** It looks *inside* the HTTP/HTTPS packet. It can read the URL path, the cookies, and the headers.
+#### ii. Layer 7 (Application Layer):
+* **How it works:** It looks *inside* the HTTP/HTTPS packet. It can read the URL path, the cookies, and the headers. Layer 7 load balancers terminate network traffic, reads the message, makes a load-balancing decision, then opens a connection to the selected server.
 * **Pros:** Extremely smart routing. It can send `/video` traffic to high-bandwidth servers and `/chat` traffic to high-compute servers.
 * **Example:** AWS Application Load Balancer (ALB). Slower than L4, but essential for modern microservice architectures.
+![alt text](image-10.png)
 
 
+## Application Layer
 
----
+When you separate the web layer (the frontend handling HTTP requests) from the application layer (the backend processing business logic), you open the door to **Microservices**. But once you break your application apart, you immediately encounter a massive networking problem, which is solved by **Service Discovery**.
 
-### Interactive Load Balancer Simulator
+Here is how these two concepts fit together in modern system design.
 
-To see why choosing the right algorithm matters, try the simulator below.
+### 1. Microservices (The "What")
 
-Set the algorithm to **Round Robin** and watch what happens if one server gets stuck processing a heavy task—the LB will blindly keep sending it traffic, causing a bottleneck. Then, switch to **Least Connections** to see how the LB intelligently routes around the bogged-down server.
+In a traditional monolithic architecture, your entire application—let's say an e-commerce platform with User Profiles, Product Catalog, and Billing—is bundled into one giant codebase and runs on a single server instance.
 
-You can also simulate a health check failure by "killing" a server mid-traffic.
+In a **Microservices** architecture, you split that monolith into small, autonomous applications based on the Single Responsibility Principle.
+
+* **How it works:** You have a `User Service`, a `Catalog Service`, and a `Billing Service`. Each service is developed independently, deployed in its own Docker container, and usually has its own dedicated database (like an isolated PostgreSQL instance) so they don't step on each other's toes.
+* **The Advantage (Agility & Scaling):** If your website gets hit by a massive wave of traffic on Black Friday, mostly from people browsing items, you don't need to duplicate the entire heavy application. You just spin up 10 extra containers of the `Catalog Service`. The `Billing Service` can stay exactly as it is.
+* **The Disadvantage (Complexity):** You now have a distributed system. Instead of one function simply calling another function within the same code, these services have to communicate over the network via APIs or RPC calls. Networks fail, latency increases, and monitoring becomes a headache.
+
+### 2. Service Discovery (The "How")
+
+Once you move to microservices, you face a critical infrastructure problem: **Dynamic IP Addresses**.
+
+If your `User Service` needs to talk to your `Billing Service`, it needs an IP address. In the old days, you would hardcode `192.168.1.50` into a configuration file. But in a microservices world, containers are constantly being spun up to handle load, and destroyed when traffic drops. Every time a container spins up, it gets a random, unpredictable IP address.
+
+**Service Discovery** is the internal phonebook that solves this. It relies on a central tool called a **Service Registry** (like Consul, Eureka, or Kubernetes etcd).
+
+Here is the exact flow:
+
+1. **Registration:** When a new `Billing Service` container spins up, the very first thing it does is ping the Service Registry and say: *"Hi, I am a Billing Service, and my current IP is 10.4.5.99."*
+2. **Heartbeats:** The `Billing Service` constantly sends "heartbeats" (pings) to the Registry every few seconds to prove it is still alive. If it crashes, the Registry removes its IP from the list.
+3. **Discovery:** When the `User Service` wants to process a payment, it doesn't try to guess an IP. It asks the Service Registry: *"Give me the IP of an available Billing Service."* 
+4. **Routing:** The Registry returns a healthy IP, and the `User Service` makes its network call.
+
+![alt text](image-11.png)
