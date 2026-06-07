@@ -492,3 +492,179 @@ Here is the exact flow:
 4. **Routing:** The Registry returns a healthy IP, and the `User Service` makes its network call.
 
 ![alt text](image-11.png)
+
+
+## Databases
+In system design, everything we have discussed so far—Load Balancers, Microservices, CDNs—is relatively easy to scale because they are **stateless**. If a web server dies, you spin up a new one. It doesn't need to remember anything.
+
+The **Database** is the hardest part of system design because it is **stateful**. It holds the actual truth of your application (user accounts, billing data, inventory). You cannot just arbitrarily destroy and recreate databases without risking catastrophic data loss.
+
+Picking the right database for a system is an important decision, as it can have a significant impact on the performance, scalability, and overall success of the system. Some of the key reasons why it's important to pick the right database include:
+
+- **Performance:** Different databases have different performance characteristics, and choosing the wrong one can lead to poor performance and slow response times.
+- **Scalability:** As the system grows and the volume of data increases, the database needs to be able to scale accordingly. Some databases are better suited for handling large amounts of data than others.
+- **Data Modeling:** Different databases have different data modeling capabilities and choosing the right one can help to keep the data consistent and organized.
+- **Data Integrity:** Different databases have different capabilities for maintaining data integrity, such as enforcing constraints, and can have different levels of data security.
+- **Support and maintenance:** Some databases have more active communities and better documentation, making it easier to find help and resources.
+
+
+### SQL vs noSQL
+SQL databases, such as MySQL and PostgreSQL, are best suited for structured, relational data and use a fixed schema. They provide robust ACID (Atomicity, Consistency, Isolation, Durability) transactions and support complex queries and joins.
+
+NoSQL databases, such as MongoDB and Cassandra, are best suited for unstructured, non-relational data and use a flexible schema. They provide high scalability and performance for large amounts of data and are often used in big data and real-time web applications.
+
+
+#### 1. SQL (Relational Databases)
+
+Relational databases organize data into rigid, two-dimensional tables (relations) containing rows (tuples) and columns (attributes) (PostgreSQL, MySQL, Oracle). This model relies heavily on relational algebra.
+
+##### The Core Pillars:
+
+* **Strict Schema:** The structure of the data must be declared before any data can be written. Every row in a table must have the exact same columns, even if many fields contain `NULL` values. Modifying this structure later requires an expensive `ALTER TABLE` statement, which can lock the table in production.
+* **Normalization:** Data is decomposed into small, distinct tables to eliminate redundancy and preserve data integrity (Normal Forms like 1NF, 2NF, 3NF). For example, rather than repeating a customer's address on every order ticket, the address is stored once in a `Customers` table, and the `Orders` table points to it using a **Foreign Key**.
+* **ACID Compliance:** SQL databases use a write-ahead log (WAL) and strict locking mechanisms to guarantee execution integrity:
+  * *Atomicity:* All operations within a transaction succeed completely, or the entire transaction is aborted and rolled back.
+  * *Consistency:* A transaction can only transition the database from one valid state to another, maintaining all schema constraints.
+  * *Isolation:* Concurrent execution of transactions leaves the database in the same state as if they were executed sequentially.
+  * *Durability:* Once a transaction is committed, it remains saved even during a total power failure or system crash.
+
+
+##### How It Processes Queries (The Cost of Joins):
+
+When you run a `SELECT` query that connects multiple tables via a `JOIN`, the database engine must execute a relational join algorithm (such as a *Nested Loop Join*, *Hash Join*, or *Sort-Merge Join*). If the columns used to join the tables are not properly indexed (using B-Trees), the engine must scan the entire disk area of both tables, causing CPU and disk I/O bottlenecks.
+
+
+#### 2. NoSQL (Non-Relational Databases)
+
+NoSQL databases abandon the rigid tabular structure and the relational model. Instead of enforcing mathematical relations at the disk layer, they focus on optimizing specific access patterns and achieving rapid horizontal scale.
+
+##### The Four Main Sub-Types:
+
+1. **Document Stores (e.g., MongoDB, Couchbase):** Data is stored as semi-structured documents, typically in JSON or BSON formats. Related information is deliberately **denormalized** and embedded within a single document. Instead of joining a `Users` table to an `Addresses` table, the addresses live directly inside the user's document as an array.
+2. **Key-Value Stores (e.g., Redis, Memcached):** The simplest data model imaginable. The database acts as a massive hash table where arbitrary values (strings, sets, binary objects) are looked up using a unique key. These are heavily optimized for memory-first reads, achieving sub-millisecond latencies.
+3. **Wide-Column / Column-Family Stores (e.g., Cassandra, ScyllaDB):** Instead of storing rows sequentially on disk, data is stored in columns. Rows are dynamic and can contain completely different sets of columns. This architecture is optimized for high-volume writes and sorting massive amounts of time-series or logging data across distributed clusters.
+4. **Graph Databases (e.g., Neo4j, Amazon Neptune):** Data is represented as **Nodes** (entities) and **Edges** (relationships), both of which can store key-value properties. Instead of computing expensive index lookups or multi-table joins to find connections, graph databases use *index-free adjacency*, meaning every node maintains direct physical pointers to its neighboring nodes on disk.
+
+##### The BASE Philosophy:
+
+Unlike the strict ACID rules of SQL, many distributed NoSQL engines operate under the **BASE** model to prioritize availability and scale:
+
+* **B**asically **A**vailable: The system guarantees a response to every request, but it might return stale data or an error state if a node is offline.
+* **S**oft State: The data can change over time without explicit user interaction because of background replication loops.
+* **E**ventual Consistency: The system will eventually become consistent across all distributed nodes, but it does not guarantee immediate consistency on subsequent reads.
+
+
+#### Key Technical Comparison
+
+| Architectural Trait          | SQL (Relational)                                                                                                                                                        | NoSQL (Non-Relational)                                                                                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Data Storage**             | Tabular rows and columns; highly normalized.                                                                                                                            | Flexible (Documents, Key-Value pairs, Wide-Columns, Graphs); highly denormalized.                                                                            |
+| **Primary Scaling Strategy** | **Vertical Scaling** (Scale-Up). Relational integrity requires a shared compute context, meaning you need a bigger machine with faster CPUs and larger RAM allocations. | **Horizontal Scaling** (Scale-Out). Data is easily distributed across standard, cheap servers by automatically partitioning (sharding) independent datasets. |
+| **Transactions & Locks**     | Strong ACID guarantees. Uses pessimistic or optimistic locking mechanisms to protect multi-row consistency.                                                             | Usually BASE or single-document atomic operations. Distributed multi-document transactions are either unsupported or carry high network latency costs.       |
+| **Query Mechanism**          | Declarative structured language (SQL) parsed and optimized by a centralized engine.                                                                                     | Object-level APIs, key lookups, or custom graph/document traversal languages (e.g., MQL, Cypher).                                                            |
+
+
+#### Architectural Selection Framework
+
+* **Choose SQL when:**
+  * The data schema is predictable, highly structured, and unlikely to change radically over time.
+  * Data relationships are deeply interconnected and require consistent integrity guarantees (e.g., ledger accounting, billing dependencies, profile permissions).
+  * The business cannot accept temporary stale data under any circumstances (Strong Consistency is mandatory).
+
+
+* **Choose NoSQL when:**
+  * The application processes unstructured or polymorphic data where the fields vary unpredictably from record to record.
+  * The target write volume is immense (thousands of transactions per second), requiring the storage system to scale out horizontally across multiple availability zones.
+  * Low latency and high availability are significantly more important than perfect data consistency (e.g., real-time user clickstreams, IoT telemetry data, chat histories, or catalog browsing).
+
+
+## Database Architecture
+When scaling a stateful application, your database eventually becomes the ultimate bottleneck. When a single database instance cannot handle the query volume, storage limits, or write throughput, engineers rely on five advanced architectural and procedural strategies to scale the data layer: **Replication**, **Sharding**, **Federation**, **Denormalization**, and **SQL Tuning**.
+
+
+### 1. Replication: Scaling Reads & Guaranteeing Fault Tolerance
+
+Replication is the process of keeping copies of the exact same data across multiple physical machines (nodes) over a network.
+
+#### How it works:
+
+The system is divided into roles. In a **Leader-Follower (Master-Slave)** setup, all data modifications (Writes, Updates, Deletes) are directed to a single primary node called the **Leader**. The Leader records the change in its write-ahead log (WAL) and copies the log over the network to one or more **Followers**. The Followers are strictly read-only and serve all incoming read traffic.
+
+#### Key Engineering Decisions:
+
+* **Synchronous vs. Asynchronous:** 
+  * *Synchronous:* The Leader waits for all Followers to confirm they have written the data before telling the application "Success." This guarantees strong consistency but introduces severe write latency.
+  * *Asynchronous:* The Leader confirms the write instantly and syncs with followers in the background. This is highly performant but introduces **Replication Lag**, where a client might read stale data from a follower that hasn't caught up yet.
+* **Failover Mechanics:** If the Leader dies, the remaining nodes hold an automated election (using consensus protocols like Raft) to promote the healthiest Follower to become the new Leader.
+
+
+### 2. Sharding: Scaling Writes via Horizontal Partitioning
+
+Replication solves the read traffic problem, but it does not help if your database is overwhelmed by *writes*, or if your total dataset size is too large to fit on a single hard drive. Sharding solves this by breaking a single table down into smaller chunks and spreading them across independent database instances.
+
+#### How it works:
+
+Instead of storing all 100 million user rows on one machine, you divide the rows across multiple database servers (shards). A centralized **Routing Layer** examines a specific column in the data—known as the **Shard Key**—to determine which machine owns that specific row.
+
+#### Core Sharding Strategies:
+
+* **Range-Based Sharding:** Splitting data by ranges of a value (e.g., IDs 1–1M go to Shard 1, 1M–2M go to Shard 2).
+* *The Catch:* Can cause massive **hotspots** if newer data is accessed far more frequently than old data.
+
+
+* **Hash-Based Sharding:** Passing the Shard Key through a mathematical hash function (e.g., `Hash(UserID) % Number of Shards`). This ensures a completely uniform distribution of data across all shards.
+* **Directory-Based Sharding:** Maintaining an external lookup table that maps IDs to physical shard locations.
+
+#### The Massive Trade-off:
+
+Sharding introduces immense complexity. Cross-shard `JOIN` operations become mathematically expensive or completely unsupported. Distributed transactions require complex two-phase commit (2PC) protocols, which slow down performance.
+
+
+### 3. Federation: Functional Partitioning
+
+Federation (also known as functional partitioning) scales a database by splitting tables apart based on business domains or functional boundaries.
+
+#### How it works:
+
+Instead of having one massive monolithic database instance containing all your tables, you create completely separate database instances for different business units. For example, all tables related to user identity (`users`, `permissions`) move to an **Auth Database**. All tables related to inventory (`products`, `stock`) move to a **Catalog Database**.
+
+#### Comparison with Sharding:
+
+* **Sharding** splits a *single table's rows* across multiple machines (Vertical slices of data).
+* **Federation** splits *different tables* across multiple machines based on logic (Horizontal separation of concerns).
+
+#### The Technical Challenge:
+
+Federation fits perfectly with microservice architectures. However, like sharding, it destroys your ability to perform native SQL `JOIN` operations across domains. If you need to generate a report showing a user's name alongside their ordered products, the application layer must execute two independent queries across two separate networks and manually stitch the datasets together in memory.
+
+### 4. Denormalization: Trading Write Performance for Read Speed
+
+In traditional relational database design, developers follow **Normalization rules (1NF to 3NF)** to ensure that every piece of data is stored in exactly one place. This eliminates data redundancy and prevents data anomalies. However, highly normalized databases require complex, multi-table `JOIN` operations at read time.
+
+**Denormalization** is the deliberate decision to break normalization rules and inject redundant copies of data into a schema to optimize read performance.
+
+#### How it works:
+
+Imagine an e-commerce platform. To show an order history screen, a normalized database must `JOIN` the `Orders` table, the `Users` table, and the `Products` table. Under heavy traffic, computing this join millions of times crushes the CPU.
+
+When denormalized, you store the user's name and the product's title directly *inside* the `Orders` row at the moment of purchase.
+
+#### The Cost of Denormalization:
+
+* **Increased Storage Space:** Data is duplicated across thousands of rows.
+* **Write Penalty:** When data changes, the application must execute multiple writes to update every redundant copy across the system.
+* **Data Inconsistency Risks:** If a user changes their name, older order records will still hold their old name unless a heavy background reconciliation job is run to sync the records.
+
+### 5. SQL Tuning: Extracting Maximum Efficiency from Raw Hardware
+
+Before implementing expensive architectural changes like sharding or federation, engineers look inward at **SQL Tuning**—optimizing how the database engine compiles, evaluates, and executes queries.
+
+#### The Primary Focus Areas:
+
+* **Index Optimization:** The database engine scans the entire disk sequentially (Full Table Scan) unless a proper index is defined. Creating a **B-Tree Index** transforms an $O(N)$ lookup into a blazing-fast $O(\log N)$ logarithmic lookup.
+* **Execution Plan Analysis:** Using commands like `EXPLAIN ANALYZE` allows developers to inspect the database's internal execution plan. It reveals exactly where the engine is spending its time (e.g., identifying a slow *Nested Loop Join* that should be optimized into a *Hash Join*).
+* **Avoiding Anti-Patterns:**
+* Replacing `SELECT *` with explicit column names to reduce network payload and disk I/O.
+* Utilizing **Covering Indexes**, where the index itself contains all the columns requested by the query, allowing the engine to completely bypass reading the primary table layout on disk.
+* Replacing heavy wildcards (like `LIKE '%text%'`) which invalidate B-Tree indexes with specialized Full-Text Search (FTS) indexes or inverted indexes.
+
