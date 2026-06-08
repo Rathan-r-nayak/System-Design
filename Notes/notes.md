@@ -668,3 +668,57 @@ Before implementing expensive architectural changes like sharding or federation,
 * Utilizing **Covering Indexes**, where the index itself contains all the columns requested by the query, allowing the engine to completely bypass reading the primary table layout on disk.
 * Replacing heavy wildcards (like `LIKE '%text%'`) which invalidate B-Tree indexes with specialized Full-Text Search (FTS) indexes or inverted indexes.
 
+
+## Caching
+Caching is the absolute cheat code for system performance. While adding more servers or sharding databases can be expensive and complex, introducing a well-designed cache layer can immediately drop read latencies from hundreds of milliseconds to microseconds, while completely shielding your core databases from heavy read traffic.
+
+To master caching, you must understand both **where** the data is stored (Topologies) and **how** the data moves between the application, the cache, and the database (Strategies).
+
+---
+
+### 1. Caching Strategies (The Data Flow Patterns)
+
+These strategies dictate how your application interacts with the cache layer during Read and Write operations. Choosing the wrong strategy can lead to data corruption, stale data, or extreme memory bloat.
+
+#### i. Cache Aside (Lazy Loading)
+
+This is the most widely used caching pattern. The application is entirely responsible for interacting with both the cache and the database.
+
+* **Read Path:** The application checks the cache first. If it is a **Cache Hit**, the data is returned immediately. If it is a **Cache Miss**, the application queries the database, writes the retrieved data into the cache for future requests, and returns it to the user.
+* **Write Path:** When data changes, the application writes directly to the database and then explicitly **invalidates (deletes)** the cache entry to avoid serving stale data.
+* **Trade-off:** Fast reads after the initial miss. However, if the cache crashes, the database is suddenly exposed to a massive influx of traffic (Cache Stampede).
+![alt text](image-12.png)
+
+#### Read-Through / Write-Through
+
+In these patterns, the application treats the cache as if it were the main data store. The application never talks to the database directly; the cache layer handles the backend data syncing.
+
+* **Read-Through:** Works exactly like Cache Aside, but the cache layer itself automatically fetches data from the database on a miss, populates its own memory, and hands it back to the application.
+* **Write-Through:** When the application writes data, it writes it to the cache. The cache synchronously writes that same data to the database.
+* **Trade-off:** Data is guaranteed to never be stale. However, write latency is high because every write must wait for both the cache and the disk-based database to complete.
+![alt text](image-15.png)
+![alt text](image-13.png)
+
+#### Write-Behind (Write-Back)
+
+An advanced, highly performant write strategy optimized for write-heavy applications.
+
+* **How it works:** The application writes data to the cache, which acknowledges success immediately (sub-millisecond write times). The cache then batches these writes and asynchronously flushes them to the database in the background.
+* **Trade-off:** Extreme write throughput. However, if the cache server experiences a sudden hardware crash or power loss before flushing its memory to the database, that data is permanently lost.
+![alt text](image-14.png)
+
+#### Refresh Ahead
+
+The cache proactively reloads hot data before it actually expires based on historical access patterns. If an item has a Time-To-Live (TTL) of 60 seconds, and it is accessed heavily at second 55, the cache automatically refreshes the item from the database in the background.
+![alt text](image-16.png)
+
+
+### 2. Caching Topologies (Where the Cache Lives)
+
+An enterprise application does not use just one cache; it deploys caches at every single tier of the request lifecycle to stop data from traveling deeper into the architecture than necessary.
+
+1. **Client Caching (Browser/Mobile):** Storing static assets, page layouts, or localized data directly on the user's device using HTTP headers (`Cache-Control`, `ETag`). It completely eliminates the network trip to your servers.
+2. **CDN Caching:** Caching full edge responses or media files geographically close to the user (as discussed previously).
+3. **Web Server / Reverse Proxy Caching:** Tools like Nginx or Varnish intercept incoming HTTP requests at your server boundary and return fully rendered HTML pages or API responses without waking up your application runtime.
+4. **Application Caching (In-Memory Stores):** Highly optimized, distributed memory stores like Redis or Memcached sit alongside your application servers. This is where you cache complex object configurations, active user sessions, or heavily processed data structures.
+5. **Database Caching:** Relational engines (like PostgreSQL) utilize internal memory buffers (e.g., `shared_buffers` or buffer pools) to keep recently accessed table pages and indexes in RAM, preventing slow disk-read operations.
