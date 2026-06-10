@@ -722,3 +722,123 @@ An enterprise application does not use just one cache; it deploys caches at ever
 3. **Web Server / Reverse Proxy Caching:** Tools like Nginx or Varnish intercept incoming HTTP requests at your server boundary and return fully rendered HTML pages or API responses without waking up your application runtime.
 4. **Application Caching (In-Memory Stores):** Highly optimized, distributed memory stores like Redis or Memcached sit alongside your application servers. This is where you cache complex object configurations, active user sessions, or heavily processed data structures.
 5. **Database Caching:** Relational engines (like PostgreSQL) utilize internal memory buffers (e.g., `shared_buffers` or buffer pools) to keep recently accessed table pages and indexes in RAM, preventing slow disk-read operations.
+
+
+## Asynchronism
+In system design, **Asynchronism** (or asynchronous processing) is the ultimate tool for protecting your application from heavy, time-consuming tasks.
+
+If caching is about fetching data faster, asynchronism is about **delaying work** so the user doesn't have to wait for it to finish.
+
+Here is the easiest way to understand the difference:
+
+* **Synchronous (In-line):** You go to a fast-food counter, order a burger, and stand there staring at the cashier until the burger is cooked and handed to you. You cannot do anything else.
+* **Asynchronous (Background):** You go to a restaurant, order your food, and the waiter gives you a buzzer. You go sit down, talk to your friends, and drink your water. When the food is ready, the buzzer goes off. Your time was not blocked.
+
+Here is how we translate that into software architecture.
+
+
+### 1. The Problem: Synchronous Bottlenecks
+
+Imagine you are building a social media app. A user clicks "Sign Up."
+If the architecture is synchronous, the Web Server has to:
+
+1. Save the user to the database (10ms)
+2. Generate a welcome PDF (1500ms)
+3. Send a Welcome Email via a 3rd party API (2000ms)
+
+The user is staring at a spinning loading wheel for nearly **4 seconds** just to create an account. Worse, if the 3rd party Email API is down, the whole sign-up process crashes, and the user gets an error.
+
+### 2. The Solution: Task Queues and Workers
+
+To make this asynchronous, we introduce two new components to the architecture: a **Message Queue** (like RabbitMQ, Apache Kafka, or AWS SQS) and **Background Workers** (like Celery for Python).
+
+Here is the new flow:
+
+1. The user clicks "Sign Up."
+2. The Web Server saves the user to the database (10ms).
+3. The Web Server creates a simple text message: *"Send welcome email to user 123"*, and drops it into the **Message Queue** (5ms).
+4. The Web Server immediately replies to the user: *"Account created successfully!"* **(Total user wait time: 15ms).**
+5. Meanwhile, a **Background Worker** wakes up, sees the message in the queue, generates the PDF, and sends the email. If the Email API is down, the Worker just leaves the message in the queue and tries again in 5 minutes. The user never notices.
+
+### 3. Common Patterns of Asynchronism
+
+As the roadmap mentions, this pattern takes two primary forms:
+
+* **Event-Driven (Task/Message Queues):** Reacting to user actions immediately, but processing the heavy lifting in the background.
+* *Examples:* Video rendering (YouTube), generating massive CSV exports, sending push notifications, processing payments.
+
+
+* **Schedule-Driven (Cron Jobs / Batch Processing):** Running heavy tasks automatically at specific times to prepare data *before* the user even asks for it.
+* *Examples:* At 2:00 AM every night, a worker aggregates all the sales data from the day and generates a dashboard report so that when the CEO logs in at 8:00 AM, the dashboard loads instantly instead of calculating millions of rows on the fly.
+
+
+
+### 4. Advanced Concepts to Watch Out For
+
+When you decouple your system like this, you introduce new engineering challenges:
+
+* **Back Pressure:** What happens if users are uploading videos faster than your workers can process them? The queue fills up. If the queue gets too full, it will crash. Back pressure is a system design mechanism where the queue signals the web server to say, *"Slow down, stop accepting uploads, I'm full!"*
+* **Idempotency:** Networks fail. Sometimes a worker processes a payment, but crashes before it can delete the message from the queue. Another worker picks up the same message and processes the payment *again*. An idempotent operation guarantees that no matter how many times a worker reads the exact same message, the user is only charged once.
+
+
+## Idempotence
+- Simply put, we can perform an idempotent operation multiple times without changing the result.
+- Furthermore, the operation must not cause any side effects after the first successful execution.
+
+Let’s look at two simple examples.
+
+### Absolute Value
+
+A function that returns the absolute value is idempotent; no matter how often we apply it to the same number, it always returns the same result.
+
+Let’s consider the function:
+
+a(x) = |x|
+
+Then the following is true:
+
+a(a(x)) = a(x)
+
+#### i. Example:
+
+a(-42) = a(a(-42)) = 42
+
+In contrast, a function that flips the sign of a number is not idempotent:
+
+b(x) = -x
+
+Then:
+
+b(b(x)) \ne b(x)
+
+#### ii. Example:
+
+b(-42) = 42 \ne a(a(-42))
+
+
+## Why Idempotence?
+- Idempotence ensures that the same request leads to the same system state, and no action is unintentionally executed more than once.
+- As an example, let’s look at a request from sender S to send money via a payment service PS to the receiver R. 
+
+### i. Non-Idempotent Example
+Here’s the non-idempotent version of the request:
+
+Idempotency 2
+- In the first try, `S` sends a request to send `$10` to `R`. `PS` receives the messages; however, the actual transfer fails. `PS` sends returns an error message to `S` who doesn’t receive that message due to a network failure.
+- `S` doesn’t know if the transfer was successful, so he tries again. This time the transfer to `R` is successful, and `PS` sends a confirmation message to `S`. Again, the confirmation fails, and `S` doesn’t know if the transfer was successful or not.
+- Therefore, he tries for the third time. `PS` receives the message, regards it as a new request, sends the money to `R`, and returns a confirmation to `S`.
+
+This isn’t an idempotent request because we intended to retry the same payment and not send it twice.
+![alt text](image-17.png)
+
+
+### ii. Idempotence Key
+- Payments are a good example to illustrate why idempotence is useful. In the previous example, we’ve seen that the payment to `R` is executed multiple times because `S` retires without knowing that the transfer already had been successful.
+
+If the operation was idempotent, this wouldn’t have been the case. But how does `PS` know that `S` just has retried the same payment and doesn’t want to send a second payment of $10 to `S`?
+
+To achieve this, `S` includes an idempotence key in his request to `PS`. This key can be, for example, is a UUID. If `PS` receives a request with the same idempotence key, it knows that it’s a retry. If it hasn’t seen the key before, it knows that it’s a new request.
+
+Let’s look at the idempotent version of the previous example:
+
+![alt text](image-18.png)
