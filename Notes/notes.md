@@ -817,28 +817,91 @@ b(-42) = 42 \ne a(a(-42))
 
 
 ## Why Idempotence?
-- Idempotence ensures that the same request leads to the same system state, and no action is unintentionally executed more than once.
-- As an example, let’s look at a request from sender S to send money via a payment service PS to the receiver R. 
+In software engineering, an **idempotent operation** is an action that can be executed multiple times without changing the result beyond the initial application.
 
-### i. Non-Idempotent Example
-Here’s the non-idempotent version of the request:
+No matter how many times you repeat the exact same request, the system's state remains exactly as it was after the very first successful request.
 
-Idempotency 2
-- In the first try, `S` sends a request to send `$10` to `R`. `PS` receives the messages; however, the actual transfer fails. `PS` sends returns an error message to `S` who doesn’t receive that message due to a network failure.
-- `S` doesn’t know if the transfer was successful, so he tries again. This time the transfer to `R` is successful, and `PS` sends a confirmation message to `S`. Again, the confirmation fails, and `S` doesn’t know if the transfer was successful or not.
-- Therefore, he tries for the third time. `PS` receives the message, regards it as a new request, sends the money to `R`, and returns a confirmation to `S`.
+### The Real-World Analogy
 
-This isn’t an idempotent request because we intended to retry the same payment and not send it twice.
-![alt text](image-17.png)
+* **Idempotent (The Elevator Button):** You are waiting for an elevator. You press the "Down" button once. The button lights up, and the system registers your request. If you get impatient and mash the button 10 more times, nothing changes. You don't summon 10 elevators, and the elevator doesn't arrive faster. The end result is exactly the same as if you had pressed it once.
+* **Non-Idempotent (The ATM Withdrawal):** You go to an ATM and request a $50 withdrawal. The machine gives you $50, and your bank balance decreases by $50. If you repeat that exact same action a second time, you get another $50, and your balance decreases again. The state of the system changes every single time the action is performed.
 
 
-### ii. Idempotence Key
-- Payments are a good example to illustrate why idempotence is useful. In the previous example, we’ve seen that the payment to `R` is executed multiple times because `S` retires without knowing that the transfer already had been successful.
+### Idempotency in REST APIs
 
-If the operation was idempotent, this wouldn’t have been the case. But how does `PS` know that `S` just has retried the same payment and doesn’t want to send a second payment of $10 to `S`?
+In web architecture, HTTP methods are strictly categorized by whether they are inherently idempotent or not.
 
-To achieve this, `S` includes an idempotence key in his request to `PS`. This key can be, for example, is a UUID. If `PS` receives a request with the same idempotence key, it knows that it’s a retry. If it hasn’t seen the key before, it knows that it’s a new request.
+#### 1. Inherently Idempotent Methods
 
-Let’s look at the idempotent version of the previous example:
+When a client sends these requests, they should feel confident that retrying them during a network failure won't accidentally corrupt data.
 
-![alt text](image-18.png)
+* **`GET` (Read):** Fetching a user's profile 100 times doesn't change the profile.
+* **`PUT` (Replace/Update):** If you send `PUT /payee/123` with the payload `{ "name": "John" }`, doing it once updates the name to John. Doing it 50 times just keeps overwriting the name with "John". The end state is the same.
+* **`DELETE` (Remove):** If you send `DELETE /payee/123`, the record is removed. If you send it again, the record is still gone (the server might return a `404 Not Found` the second time, but the *state of the database* hasn't changed further).
+
+#### 2. Non-Idempotent Methods
+
+These methods change the state of the system every time they are called.
+
+* **`POST` (Create):** If you send `POST /payees` with `{ "name": "John" }`, the database creates a new row with ID 1. If you send it again, it creates a *second* row with ID 2.
+* **`PATCH` (Partial Update):** Often non-idempotent depending on the implementation. If your payload is `{ "increment_balance_by": 10 }`, sending it 5 times adds 50 to the balance.
+
+
+## Communication
+In system design, once you have split your application into microservices or distributed your databases, you face a new fundamental problem: **How do these pieces talk to each other?**
+
+If a system cannot communicate efficiently, the entire architecture collapses under network latency. To understand communication, we have to look at it in two layers: the **Network Protocols** (how the data physically travels over the wires) and the **Architectural Styles** (how the applications actually format and understand the conversation).
+
+Here is the system design breakdown of how systems talk.
+
+### 1. Network Protocols (The Delivery Mechanisms)
+
+At the lower levels of the network stack, you have to choose how your data packets are transported. This is a strict trade-off between **Reliability** and **Speed**.
+
+#### i. TCP (Transmission Control Protocol): The Reliable Courier
+* **How it works:** Before sending data, TCP establishes a connection using a "Three-Way Handshake" (Hello -> Hi, I hear you -> Great, sending data). It numbers every single packet of data. If packet #4 gets lost, the receiver asks for it again, and TCP resends it.
+* **The Trade-off:** 100% guarantee that data arrives perfectly in order, but the handshakes and error-checking add latency.
+* **When to use it:** Web browsing, emails, file transfers, database queries. If you lose a packet of a bank transfer, it’s a disaster.
+
+
+#### ii. UDP (User Datagram Protocol): The Reckless Sprinter
+* **How it works:** "Fire and forget." It just blasts packets of data at the receiving IP address as fast as humanly possible. No handshakes, no ordering, no checking if the data actually arrived.
+* **The Trade-off:** Blazing fast with minimal overhead, but you will experience packet loss.
+* **When to use it:** Live video streaming, multiplayer gaming, VoIP calls. If a single frame of a live video drops, you don't want the stream to freeze and wait for it; you just want the *next* frame immediately.
+
+
+#### iii. HTTP (Hypertext Transfer Protocol): The Language of the Web
+* **How it works:** HTTP sits *on top* of TCP. It structures the data into a standard format that web browsers and servers understand (Headers, Body, Status Codes like 200 OK or 404 Not Found).
+* *Note on modern evolution:* HTTP/2 allowed multiple requests over a single connection, and HTTP/3 actually abandons TCP entirely and runs on a modified version of UDP (called QUIC) to make the modern web faster.
+
+### 2. Architectural Styles (The API Paradigms)
+
+Once your data reaches the server, the application code needs to know how to interpret it. When building APIs, engineers generally choose between these four paradigms based on the client's needs.
+
+#### REST (Representational State Transfer)
+
+The undisputed industry standard for public-facing web APIs.
+
+* **The Concept:** It treats everything as a **Resource** (a noun). You interact with resources using standard HTTP methods: `GET /users/123` (Read), `POST /users` (Create), `DELETE /users/123`.
+* **The Problem:** Over-fetching and Under-fetching. If your mobile app just wants to display a user's name, calling `GET /users/123` might return a massive 50KB JSON file containing their name, address, billing history, and preferences. You waste bandwidth downloading data you don't need.
+
+#### GraphQL
+
+Created by Facebook specifically to solve REST's over-fetching problem for mobile devices on slow 3G networks.
+
+* **The Concept:** Instead of having dozens of endpoints (URLs), there is only one endpoint (`/graphql`). The client sends a highly specific query block detailing *exactly* what it wants.
+* **The Advantage:** If the client says "Give me User 123, but ONLY their first name and avatar URL", the server returns a tiny JSON object with exactly those two fields. Nothing more, nothing less.
+
+#### RPC (Remote Procedure Call)
+
+The oldest style, but still heavily used.
+
+* **The Concept:** Instead of focusing on *Resources* (nouns), it focuses on *Actions* (verbs). It makes executing code on a server 1,000 miles away look exactly like calling a local function in your own Python code.
+* **Example:** Instead of `POST /users` with a payload, an RPC call looks like `POST /createUser`.
+
+#### gRPC (Google Remote Procedure Call)
+
+The modern, hyper-optimized evolution of RPC, used almost exclusively for internal microservice-to-microservice communication.
+
+* **The Concept:** Instead of sending bulky, human-readable JSON text over HTTP/1.1, gRPC sends strictly typed, **binary data** (using Protocol Buffers) over HTTP/2.
+* **The Advantage:** It is exponentially faster, smaller, and uses less CPU than REST. It also supports bidirectional streaming (both the client and server can send streams of data simultaneously). It is the backbone of high-performance backend systems.
