@@ -780,6 +780,7 @@ When you decouple your system like this, you introduce new engineering challenge
 * **Back Pressure:** What happens if users are uploading videos faster than your workers can process them? The queue fills up. If the queue gets too full, it will crash. Back pressure is a system design mechanism where the queue signals the web server to say, *"Slow down, stop accepting uploads, I'm full!"*
 * **Idempotency:** Networks fail. Sometimes a worker processes a payment, but crashes before it can delete the message from the queue. Another worker picks up the same message and processes the payment *again*. An idempotent operation guarantees that no matter how many times a worker reads the exact same message, the user is only charged once.
 
+![alt text](image-19.png)
 
 ## Idempotence
 - Simply put, we can perform an idempotent operation multiple times without changing the result.
@@ -846,6 +847,7 @@ These methods change the state of the system every time they are called.
 * **`POST` (Create):** If you send `POST /payees` with `{ "name": "John" }`, the database creates a new row with ID 1. If you send it again, it creates a *second* row with ID 2.
 * **`PATCH` (Partial Update):** Often non-idempotent depending on the implementation. If your payload is `{ "increment_balance_by": 10 }`, sending it 5 times adds 50 to the balance.
 
+![alt text](image-20.png)
 
 ## Communication
 In system design, once you have split your application into microservices or distributed your databases, you face a new fundamental problem: **How do these pieces talk to each other?**
@@ -905,3 +907,212 @@ The modern, hyper-optimized evolution of RPC, used almost exclusively for intern
 
 * **The Concept:** Instead of sending bulky, human-readable JSON text over HTTP/1.1, gRPC sends strictly typed, **binary data** (using Protocol Buffers) over HTTP/2.
 * **The Advantage:** It is exponentially faster, smaller, and uses less CPU than REST. It also supports bidirectional streaming (both the client and server can send streams of data simultaneously). It is the backbone of high-performance backend systems.
+
+
+## Performance Antipatterns
+Performance antipatterns in system design refer to common mistakes or suboptimal practices that can lead to poor performance in a system. These patterns can occur at different levels of the system and can be caused by a variety of factors such as poor design, lack of optimization, or lack of understanding of the workload.
+
+
+In software architecture, a **Performance Antipattern** is a design decision that initially seems like a logical, straightforward solution, but ultimately creates severe bottlenecks when the system scales under load.
+
+### 1. Chatty I/O (The "Death by a Thousand Cuts")
+
+This occurs when an application makes numerous small network requests to a database or external API instead of a single, batched request.
+
+* **The Trap:** You need to fetch the profiles of 100 users. You write a loop that queries the database: `SELECT * FROM users WHERE id = X` 100 times.
+* **The Reality:** The actual computation time to find the user is negligible (maybe 1ms). The killer is the **network latency**. If the network trip to your PostgreSQL database takes 10ms, making 100 sequential requests adds a full 1,000ms (1 second) of pure network waiting time to your application.
+* **The Fix:** Use bulk operations. Rewrite the query to `SELECT * FROM users WHERE id IN (...)` to fetch all 100 records in a single 10ms network round-trip.
+
+### 2. Extraneous Fetching (The "Over-packer")
+
+This happens when you pull far more data from a datastore than the application actually needs to fulfill the current operation.
+
+* **The Trap:** Using `SELECT * FROM table` when you only need a single column, or fetching deeply nested JSON objects just to read one ID.
+* **The Reality:** It wastes database CPU, consumes unnecessary RAM on your application server, and saturates the network bandwidth.
+* **The Fix:** Explicitly name the exact columns or fields you need. If you are building APIs, this is exactly the problem GraphQL was invented to solve.
+
+### 3. Synchronous I/O (The "Traffic Jam")
+
+This occurs when an application's main thread pauses and waits for an external operation (like a disk read or a network call) to finish before doing anything else.
+
+* **The Trap:** A user uploads a file, and your web framework blocks the entire thread while the file saves to disk.
+* **The Reality:** While the CPU is waiting for the hard drive, it cannot process any other users' HTTP requests. If you get 50 concurrent uploads, all your worker threads lock up, and your application appears offline.
+* **The Fix:** Implement asynchronous programming (e.g., using `asyncio` in Python). When a thread hits an I/O boundary, it yields control back to the event loop so the CPU can handle other users while the file finishes saving in the background.
+
+### 4. Busy Database (The "Overworked Manager")
+
+Databases are the hardest components to scale. This antipattern occurs when you offload heavy processing or business logic into the database layer instead of the application layer.
+
+* **The Trap:** Using complex database triggers, heavy stored procedures, or performing complex mathematical string-matching directly within a SQL query.
+* **The Reality:** Compute power on a database server is precious and expensive. If a heavy query locks up the CPU, all other read/write traffic grinds to a halt.
+* **The Fix:** Databases should strictly be used for storage, retrieval, and relational integrity. Pull the raw data out of the database and perform the heavy algorithmic compute or data transformation in your application code (which is cheap and easy to scale horizontally).
+
+### 5. Noisy Neighbor (The "Resource Hog")
+
+This happens in shared hosting environments or unconfigured containerized deployments where one process consumes all the available system resources, starving the others.
+
+* **The Trap:** Deploying three microservice Docker containers onto a single Ubuntu host without setting CPU or memory limits.
+* **The Reality:** If Service A experiences a bug that causes a massive memory leak, it will consume 100% of the host's RAM. Services B and C, which are perfectly healthy, will be killed by the operating system because there is no memory left.
+* **The Fix:** Strict resource isolation. Always configure memory and CPU quotas (`--memory` and `--cpus` flags) for every container so a runaway process only crashes itself, not the entire host.
+
+### 6. The Retry Storm (The "Self-DDoS")
+
+This is one of the most dangerous architectural failures in distributed systems. It happens when an upstream service goes down, and downstream clients aggressively and immediately retry their failed requests.
+
+* **The Trap:** An external LLM API or orchestration node times out. Your application catches the error and loops: `while failed: try_again()`.
+* **The Reality:** If the API went down because it was overloaded, 1,000 clients instantly retrying their requests creates a massive spike in traffic. When the API tries to reboot, it is immediately hit by the backlog of thousands of furious retries, causing it to instantly crash again. You have effectively DDoS'd your own infrastructure.
+* **The Fix:** Implement **Exponential Backoff with Jitter**. If a request fails, wait 1 second. If it fails again, wait 2 seconds, then 4, then 8. Adding "Jitter" (randomizing the wait time slightly, like 1.2s or 4.5s) ensures that all 1,000 clients don't retry at the exact same millisecond.
+
+### 7. Improper Instantiation
+- **The Trap:** Improper instantiation in system design refers to the practice of creating unnecessary instances of an object, class or service, which can lead to performance and scalability issues. 
+- **The Reality:** This can happen when the system is not properly designed, when the code is not written in an efficient way, or when the code is not optimized for the specific use case.
+- **The Fix:** writing the efficient code and using the efficient algorithm that is well suited for the particular tasks.
+
+### 8. Monolithic Persistence
+- **The Trap:** Monolithic Persistence refers to the use of a single, monolithic database to store all of the data for an application or system. 
+- **The Reality:** This approach can be used for simple, small-scale systems but as the system grows and evolves it can become a bottleneck, resulting in poor scalability, limited flexibility, and increased complexity. 
+- **The Fix:** a number of approaches can be taken such as Microservices, Sharding, and NoSQL databases.
+
+### 9. Busy Frontend
+- **The Trap:** A busy frontend happens when the user-facing part of the system — such as the web servers, CDN, or browser — is handling more work than it can efficiently manage. This can lead to slow page loads, delayed responses, or timeouts. Common causes include too many concurrent users, large static assets, heavy client-side rendering, or missing caching layers.
+- **The Fix:** you can use CDNs to cache static files, optimize and lazy-load scripts, balance requests across multiple servers, and reduce unnecessary API calls. The goal is to make sure the frontend remains fast and responsive even under heavy traffic.
+
+### 10. No Caching
+- No caching antipattern occurs when a cloud application that handles many concurrent requests, repeatedly fetches the same data. This can reduce performance and scalability.
+- When data is not cached, it can cause a number of undesirable behaviors, including:
+  - Repeatedly fetching the same information from a resource that is expensive to access, in terms of I/O overhead or latency.
+  - Repeatedly constructing the same objects or data structures for multiple requests.
+  - Making excessive calls to a remote service that has a service quota and throttles clients past a certain limit.
+
+
+## Monitoring
+Building a massively scalable, distributed architecture using load balancers, microservices, and databases is only half the battle. Once your system is running in production, you face a terrifying reality: **Hardware fails, networks drop, and code has bugs.**
+
+If you do not have **Monitoring** (often grouped into the broader term **Observability**), you are flying completely blind. In a poorly monitored system, the first time you realize your database has crashed is when angry users start complaining on Twitter. In a well-monitored system, an automated alarm wakes an engineer up 10 minutes *before* the database crashes so they can fix it.
+
+### 1. The Three Pillars of Observability
+
+To truly understand what is happening inside a distributed system, engineers instrument their code to emit three specific types of data:
+
+* **Metrics (The "What"):** These are aggregated numbers measured over time. They tell you *what* is currently happening.
+* *Examples:* CPU is at 95%, Memory is at 12GB, we are receiving 500 Requests Per Second (RPS), the database disk is 80% full.
+
+
+* **Logs (The "Why"):** These are immutable, timestamped records of discrete events. When a metric looks wrong, you read the logs to find out *why*.
+* *Examples:* `[ERROR] 10:45:01 - Failed to connect to PostgreSQL database on port 5432.` or `[INFO] 10:45:02 - User 8829 successfully checked out.`
+
+
+* **Traces (The "Where"):** In a microservices architecture, a single user request might travel through 5 different servers. Traces inject a unique "Trace ID" into the request at the Load Balancer and pass it along. If the request takes 4 seconds, the trace visually shows you *exactly where* the bottleneck happened (e.g., Auth Service took 10ms, Payment Service took 3900ms, DB took 90ms).
+
+### 2. What Exactly Are We Monitoring?
+
+* **Health Monitoring:** The simplest form. Are the servers actually alive? Load balancers constantly ping `/health` endpoints on your servers. If the server doesn't reply "200 OK", it is assumed dead and traffic is routed away.
+* **Availability Monitoring:** A truly healthy system requires that the components and subsystems that compose the system are available. Availability monitoring is closely related to health monitoring. But whereas health monitoring provides an immediate view of the current health of the system, availability monitoring is concerned with tracking the availability of the system and its components to generate statistics about the uptime of the system.
+* **Performance Monitoring:** Tracking the "Golden Signals": Latency (how fast), Traffic (how much), Errors (how many failing), and Saturation (how "full" the CPU/Memory is).
+* **Security Monitoring:** Watching for unusual patterns, like a single IP address attempting to log in 1,000 times a second, or a sudden spike in outbound data (which could indicate a data breach).
+* **Usage/Business Monitoring:** Systems exist to serve a business. You must monitor Daily Active Users (DAU), conversion rates, and cart abandonments. If CPU is perfectly healthy but revenue just dropped to $0, the system is broken.
+* **Instrumentation:** Instrumentation is a critical part of the monitoring process. You can make meaningful decisions about the performance and health of a system only if you first capture the data that enables you to make these decisions. The information that you gather by using instrumentation should be sufficient to enable you to assess performance, diagnose problems, and make decisions without requiring you to sign in to a remote production server to perform tracing (and debugging) manually. Instrumentation data typically comprises metrics and information that's written to trace logs.
+
+### 3. The Output: Dashboards and Alerts
+
+Collecting terabytes of log data is useless if no one looks at it. Monitoring data feeds into two critical operational tools:
+
+* **Visualization (Dashboards):** Tools like Grafana, Datadog, or Kibana take raw metrics and turn them into beautiful, readable graphs. You mount these on TVs in the engineering office so the team can see the heartbeat of the system at a glance.
+* **Alerting (Paging):** Humans shouldn't stare at graphs all day. You configure automated thresholds. If `Error Rate > 5% for 3 minutes`, the monitoring system triggers an incident response tool (like PagerDuty), which physically calls or texts the on-call engineer at 3:00 AM to fix the issue.
+
+
+## Cloud Design Patterns
+## Design and implementation
+ This list represents the core tactical toolkit for building and migrating complex systems in the cloud. When you are actually sitting down to write code and design your AWS or Kubernetes environments, these are the blueprints you will use.
+
+### 1. Modernizing Legacy Systems
+
+When you are dealing with old, messy codebases, you cannot just rewrite everything overnight. These patterns help you safely transition to modern architectures.
+
+* **Strangler Fig:** Instead of turning off an old monolithic application all at once, you put a router in front of it. You build one new microservice (e.g., Inventory) and tell the router to send inventory traffic to the new service, while everything else still goes to the monolith. Over time, you build more microservices, slowly "strangling" the monolith until it can be deleted.
+* **Anti-Corruption Layer (ACL):** When your shiny new microservice needs to talk to a horrific 20-year-old legacy database, you don't want to pollute your new code with the old data formats. You build a translation layer (the ACL) between them. The new service talks to the ACL in a modern format (like JSON), and the ACL translates it into the archaic format the legacy system demands.
+
+
+### 2. The API Gateway Family
+
+When you have dozens of microservices, you cannot let client applications (like a mobile app) talk to them directly. It creates chaos, security risks, and massive network overhead. You place an **API Gateway** in front of them to control the traffic.
+
+* **Gateway Routing:** The most basic function. The Gateway acts as a reverse proxy. When the client asks for `/users`, the Gateway knows exactly which internal IP address hosts the User Microservice and routes the traffic there.
+* **Gateway Offloading:** Every microservice needs SSL decryption, rate limiting, and authentication validation. Instead of writing that code 20 times in 20 different microservices, you "offload" it to the Gateway. The Gateway handles the security, and the internal microservices just handle business logic.
+* **Gateway Aggregation:** A mobile app needs to load a profile screen, which requires data from the User Service, the Billing Service, and the Order Service. Instead of the mobile app making 3 slow network trips over a 4G connection, it makes 1 trip to the Gateway. The Gateway makes the 3 internal trips over the blazing-fast cloud network, aggregates the data into one JSON package, and sends it back to the phone.
+* **Backends for Frontend (BFF):** If you use one massive API Gateway for a mobile app, a desktop web app, and an external B2B partner, it becomes bloated and difficult to manage. The BFF pattern creates a dedicated, lightweight Gateway specifically tailored for each frontend.
+
+### 3. Data & State Management
+
+Managing how data is stored, read, and configured in a highly distributed environment.
+
+* **CQRS (Command and Query Responsibility Segregation):** You physically split your application and databases in half. One half strictly handles "Commands" (Writes/Updates) using a highly normalized database to ensure data integrity. The other half strictly handles "Queries" (Reads) using a highly denormalized, flattened database to guarantee blazing-fast read performance. They are kept in sync via background events.
+* **External Config Store:** If you hardcode database passwords or feature toggles in your code, you have to reboot your servers to change them. This pattern moves all configurations to an external, centralized vault (like AWS Parameter Store). Your microservices read from this vault at runtime, allowing you to change settings across 100 servers instantly without redeploying code.
+* **Static Content Hosting:** Compute servers (like Python or Node.js backends) are expensive. You should never use them to serve static images, CSS, or JavaScript files. This pattern dictates moving all static assets to cheap blob storage (like AWS S3) and serving them directly to the user via a CDN, completely bypassing your application servers.
+
+### 4. Compute & Execution Flow
+
+How individual processes and containers are structured to maximize efficiency and reliability.
+
+* **Sidecar:** You deploy a secondary "helper" container directly alongside your primary application container. The application only executes business logic. The Sidecar intercepts all incoming and outgoing network traffic, handling logging, telemetry, and security retries. If the application crashes, the Sidecar survives to report the error.
+* **Pipes & Filters:** Used for complex data processing. Instead of writing one massive function to process a video file, you break it into independent "Filters" (e.g., Decrypt -> Compress -> Watermark). You connect them with "Pipes" (message queues). This acts like an assembly line; if the Watermark filter crashes, the other steps keep working.
+* **Leader Election:** If you have 10 identical worker servers running, but a specific task (like generating a daily financial report) can only be executed by exactly *one* server to avoid duplicate data, the servers use a consensus algorithm to "elect" a leader. If the leader crashes, the remaining 9 instantly elect a new one to take over.
+* **Compute Resource Consolidation:** The opposite of microservices. If you have 5 tiny background tasks running on 5 separate cloud servers, you are wasting money on idle CPU time. Consolidation involves packing multiple distinct tasks onto a single compute instance to maximize resource utilization and slash your cloud bill.
+
+
+## Data Management
+Because data is the heaviest, most fragile, and most expensive part of any system, these patterns are designed to keep data secure, fast, and scalable in a distributed environment.
+
+You have actually already encountered four of these on our journey so far:
+
+* **Sharding:** Splitting a massive database table across multiple servers.
+* **Static Content Hosting:** Moving images and HTML off expensive compute servers and onto cheap cloud storage (like AWS S3) served by a CDN.
+* **Cache-Aside:** The most common caching strategy where the application lazily loads data into the cache only after a cache miss.
+* **CQRS:** Splitting your database architecture into a "Write" side and a "Read" side.
+
+**four new patterns** that dictate how we query, secure, and track data in the cloud.
+
+### 1. Valet Key Pattern (Security & Bandwidth)
+
+**The Problem:** A user wants to upload a massive 5GB 4K video to your app. If they upload it to your API Server, your server has to spend 20 minutes receiving the file, holding it in memory, and then forwarding it to your cloud storage (like AWS S3). This destroys your server's bandwidth and CPU.
+
+**The Solution:** The Valet Key Pattern.
+Think of a physical valet key for a car—it lets the valet drive the car, but it won't unlock the glovebox or the trunk.
+
+1. The user tells your API: *"I want to upload a video."*
+2. Your API verifies they are allowed to do this, and asks the Cloud Storage for a **Pre-Signed URL** (the Valet Key).
+3. Your API hands this temporary, restricted URL to the user's phone.
+4. The user's phone uploads the 5GB video **directly** to the Cloud Storage using that URL. Your API server is completely bypassed, saving you massive amounts of money and compute power.
+
+### 2. Materialized View (Read Performance)
+
+**The Problem:** You have a CEO dashboard that displays "Total Sales by Region for Q3." To calculate this, the database has to execute a horrific SQL query that `JOIN`s 5 different massive tables and sums up millions of rows. It takes 15 seconds to run. If 10 executives open the dashboard, your database crashes.
+
+**The Solution:** A Materialized View.
+
+* A standard SQL `VIEW` just saves the text of the query. Every time you open it, it runs the heavy math all over again.
+* A **Materialized View** runs the heavy math *once* in the background, and physically saves the resulting summary data to the hard drive like a brand-new, static table.
+* When the CEO opens the dashboard, it queries the Materialized View and loads in 5 milliseconds. The trade-off is that you have to schedule a background job to "refresh" the view (e.g., every 10 minutes), meaning the dashboard data might be slightly stale.
+
+### 3. Index Table Pattern (Sharding Lookups)
+
+**The Problem:** You have a sharded database holding 1 billion users. You sharded it by `UserID`. This means if a user logs in with `UserID: 9948`, the router knows exactly which shard holds their data. But what if they try to log in with `Email: rathan@example.com`? The router has no idea which shard holds that email. It has to search *every single shard* (a pattern called Scatter-Gather), which is incredibly slow.
+
+**The Solution:** An Index Table.
+You create a small, fast, secondary database table specifically for cross-referencing. It contains only two columns: `Email` and `UserID`.
+When a user logs in with an email, the system quickly checks the Index Table to find the `UserID`, and then routes the request instantly to the correct shard.
+
+### 4. Event Sourcing (Audit & State)
+
+**The Problem:** Traditional databases only store the *current state*. If you look at a database and see a user's bank balance is `$100`, you have no idea how it got there. Did they deposit $100? Did they deposit $500 and withdraw $400? If there is a bug, the history is lost forever.
+
+**The Solution:** Event Sourcing.
+Instead of storing the current state, you store an immutable log of every **Event** that has ever happened.
+
+* `Event 1: Account Created`
+* `Event 2: Deposited $500`
+* `Event 3: Withdrew $400`
+
+To figure out the current balance, the application fetches the event log and **replays** it from start to finish.
+
+* **The Benefit:** Perfect, unalterable audit trails. If you deploy a bug that calculates interest wrong, you just fix the bug and replay the events to instantly fix the balance. (This pattern is almost always paired with **CQRS** so you don't have to replay 10,000 events every time a user wants to read their balance).
