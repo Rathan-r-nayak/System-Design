@@ -618,7 +618,7 @@ In system design interviews and cloud architecture, you will frequently be asked
 
 #### ii. Layer 7 (Application Layer):
 * **How it works:** It looks *inside* the HTTP/HTTPS packet. It can read the URL path, the cookies, and the headers. Layer 7 load balancers terminate network traffic, reads the message, makes a load-balancing decision, then opens a connection to the selected server.
-* **Pros:** Extremely smart routing. It can send `/video` traffic to high-bandwidth servers and `/chat` traffic to high-compute servers.
+* **Pros:** Extremely smart routinghld. It can send `/video` traffic to high-bandwidth servers and `/chat` traffic to high-compute servers.
 * **Example:** AWS Application Load Balancer (ALB). Slower than L4, but essential for modern microservice architectures.
 
 ![alt text](image-10.png)
@@ -702,12 +702,16 @@ The undisputed industry standard for public-facing web APIs.
 * **The Concept:** It treats everything as a **Resource** (a noun). You interact with resources using standard HTTP methods: `GET /users/123` (Read), `POST /users` (Create), `DELETE /users/123`.
 * **The Problem:** Over-fetching and Under-fetching. If your mobile app just wants to display a user's name, calling `GET /users/123` might return a massive 50KB JSON file containing their name, address, billing history, and preferences. You waste bandwidth downloading data you don't need.
 
+---
+
 #### GraphQL
 
 Created by Facebook specifically to solve REST's over-fetching problem for mobile devices on slow 3G networks.
 
 * **The Concept:** Instead of having dozens of endpoints (URLs), there is only one endpoint (`/graphql`). The client sends a highly specific query block detailing *exactly* what it wants.
 * **The Advantage:** If the client says "Give me User 123, but ONLY their first name and avatar URL", the server returns a tiny JSON object with exactly those two fields. Nothing more, nothing less.
+
+---
 
 #### RPC (Remote Procedure Call)
 
@@ -716,12 +720,77 @@ The oldest style, but still heavily used.
 * **The Concept:** Instead of focusing on *Resources* (nouns), it focuses on *Actions* (verbs). It makes executing code on a server 1,000 miles away look exactly like calling a local function in your own Python code.
 * **Example:** Instead of `POST /users` with a payload, an RPC call looks like `POST /createUser`.
 
+---
+
 #### gRPC (Google Remote Procedure Call)
 
 The modern, hyper-optimized evolution of RPC, used almost exclusively for internal microservice-to-microservice communication.
 
 * **The Concept:** Instead of sending bulky, human-readable JSON text over HTTP/1.1, gRPC sends strictly typed, **binary data** (using Protocol Buffers) over HTTP/2.
 * **The Advantage:** It is exponentially faster, smaller, and uses less CPU than REST. It also supports bidirectional streaming (both the client and server can send streams of data simultaneously). It is the backbone of high-performance backend systems.
+
+
+In standard HTTP, the client *always* initiates the conversation. The client asks for data, and the server replies. But what if the server needs to push live data to the client the second it happens?
+
+This fits perfectly into your **Communication** notes under "Real-Time Communication." Here is how the industry solves this, progressing from the simplest hack to the most advanced protocol.
+
+---
+### 3. Real-Time Communication
+
+#### i. Long Polling (The "Are We There Yet?" Model)
+
+Instead of the client repeatedly pinging the server every single second (which crushes your server's CPU), Long Polling holds the connection hostage until there is actually something to report.
+
+**Real-World Example:** A simple web-based customer support chat.
+
+**The Step-by-Step Flow:**
+
+1. The client sends an HTTP request asking, "Are there any new messages?"
+2. The server checks the database. There are no messages. Instead of returning an empty response, the server *holds the connection open* and waits.
+3. 15 seconds later, a support agent types a message.
+4. The server immediately catches this event, packages the message into the HTTP response, and sends it to the client, closing the connection.
+5. The client receives the message, displays it, and instantly fires off a brand-new Long Polling request to wait for the next message.
+
+---
+
+#### ii. Server-Sent Events / SSE (The "Radio Broadcast" Model)
+
+SSE is a strict **one-way (unidirectional)** connection. The client tunes in, and the server continuously streams data downward over a single, permanently open HTTP connection.
+
+**Real-World Example:** A live stock market ticker or a live sports score feed.
+
+**The Step-by-Step Flow:**
+
+1. The client sends a standard HTTP request: "Subscribe me to the live score."
+2. The server responds, but sets a specific header (`Content-Type: text/event-stream`) which tells the browser to keep the connection alive indefinitely.
+3. The server pushes "Team A scored a goal" to the client.
+4. Minutes later, the server pushes "Team B scored" through the *exact same* connection.
+5. The client listens and updates the UI, but if the client wants to send a message back to the server, it must open a completely separate, standard HTTP `POST` request.
+
+---
+
+#### iii. WebSockets (The "Phone Call" Model)
+
+WebSockets provide a full-duplex, **bidirectional** connection. Both the client and server can talk over each other simultaneously using a single, persistent TCP connection, completely abandoning standard HTTP rules.
+
+**Real-World Example:** A fast-paced multiplayer web game or collaborative editing (like Google Docs).
+
+**The Step-by-Step Flow:**
+
+1. The client sends an HTTP request asking to "Upgrade" the connection to a WebSocket.
+2. The server agrees (the Handshake), and the HTTP protocol is permanently swapped out for the WebSocket protocol.
+3. A persistent TCP tunnel is locked open between the two.
+4. The client can press "Jump" (sending data to the server) at the exact same millisecond the server tells the client "An enemy spawned" (sending data to the client), with sub-millisecond latency.
+
+
+#### Summary Comparison
+
+* **Long Polling:** High overhead because it constantly opens and closes HTTP connections. Usually used only as a fallback for older browsers.
+* **SSE:** Unidirectional (Server to Client). Built on standard HTTP, making it very easy to load balance. Excellent for feeds and notifications.
+* **WebSockets:** Bidirectional. Essential for low-latency, highly interactive applications, but very difficult to scale across multiple servers.
+
+
+![alt text](image-24.png)
 
 ---
 
@@ -1088,6 +1157,41 @@ An enterprise application does not use just one cache; it deploys caches at ever
 5. **Database Caching:** Relational engines (like PostgreSQL) utilize internal memory buffers (e.g., `shared_buffers` or buffer pools) to keep recently accessed table pages and indexes in RAM, preventing slow disk-read operations.
 
 
+## Distributed Hashing
+
+
+## 1. The Modulo Approach (The Problem)
+
+This is the legacy way of routing data, using simple division.
+
+* **Step 1:** You have 4 cache servers (S0, S1, S2, S3).
+* **Step 2:** A user uploads `avatar.png`. You hash the filename and get the number **10**.
+* **Step 3:** You use the modulo formula: 10 % 4 servers = **2**. The image goes to **S2**.
+* **Step 4 (The Disaster):** S3 crashes. You now have 3 servers. The formula changes to 10 % 3 servers = **1**. The system looks for the image on **S1**, but it isn't there. You experience a system-wide cache miss because the math changed for every single key.
+
+---
+
+## 2. Standard Consistent Hashing
+
+This solves the global reshuffle by placing everything on a circular number line (e.g., 0 to 999).
+
+* **Step 1 (Place Servers):** You hash the IP addresses of 3 servers. Server A lands at position **100**, Server B at **500**, and Server C at **800**.
+* **Step 2 (Place Data):** A new image is uploaded. The filename hashes to position **300**.
+* **Step 3 (Route):** The system moves clockwise from 300. The first server it encounters is **Server B at 500**. The image is stored there.
+* **Step 4 (Survive a Crash):** Server B catches fire. The image at 300 moves clockwise, bypasses the dead Server B, and lands on **Server C at 800**. Only Server B's data moved; Server A and Server C's existing data remained perfectly untouched.
+
+---
+
+## 3. Virtual Nodes (The Optimization)
+
+Standard consistent hashing creates uneven gaps. Server C (800) has to cover a massive gap all the way to Server A (100). Virtual nodes fix this by chopping the ring into tiny pieces.
+
+* **Step 1 (Multiply):** Instead of placing 3 physical servers on the ring, you create 3 "virtual" labels for each one (A1, A2, A3, B1, B2, B3, C1, C2, C3).
+* **Step 2 (Scatter):** You hash all 9 labels. They scatter completely randomly: A1(50), B1(200), C1(350), A2(500), B2(700), C2(900), etc.
+* **Step 3 (Route):** An image hashes to **400**. Moving clockwise, it hits **A2 at 500**.
+* **Step 4 (Resolve):** The system maintains a tiny lookup table. It sees that virtual node A2 belongs to Physical Server A. The image is saved to Physical Server A. The traffic is now perfectly averaged across the hardware.
+
+![alt text](image-25.png)
 
 ## Phase 5: Decoupling & Background Work (How you scale time)
 
