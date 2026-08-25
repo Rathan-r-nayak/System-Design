@@ -161,9 +161,10 @@ Your notes mention RabbitMQ and Kafka, but they work very differently.
 
 **6. Object vs. Block vs. File Storage**
 You mentioned AWS S3 for static assets, but cloud storage comes in three distinct flavors.
-
 * **Study:** Object Storage (S3), Block Storage (EBS), and File Storage (EFS/NFS).
 
+**7. Rate Limitte**
+type of rate limitter
 ---
 
 ### Part 2: The Ideal Flow for Your Notes

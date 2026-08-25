@@ -528,6 +528,119 @@ DigiCert takes that hash digest (`a5f8x9...`) and encrypts it using **DigiCert's
 4. **Attach and Deliver:**
 DigiCert attaches this encrypted signature to the bottom of your raw, plain-text certificate. They hand this final file back to you to install on your web server.
 
+---
+
+## Back-of-the-envelope Estimation
+Back-of-the-envelope estimation (also known as capacity planning) is the process of using rough mathematical calculations to prove that your system architecture can physically handle the expected load.
+
+If you guess your traffic, you might build a system on a single PostgreSQL instance. If you calculate it and realize you need to store 18 Petabytes of data, you instantly know you must use a distributed NoSQL database like Cassandra or Amazon S3.
+
+
+### The "Cheat Sheet" Constants
+
+Before you do any math, you need to know the standard approximations engineers use to make the math easy to do in their heads.
+
+* **Time:** 1 day has exactly 86,400 seconds. For estimation, always round this to **100,000 seconds**.
+* **Data Volume:** 1 Byte = 8 bits
+* **1 Kilobyte (KB):** 1,000 Bytes (Size of a short text string or JSON payload)
+* **1 Megabyte (MB):** 1,000 KB (Size of a standard photo)
+* **1 Gigabyte (GB):** 1,000 MB (Size of a short video)
+* **1 Terabyte (TB):** 1,000 GB (Starting scale for databases)
+* **1 Petabyte (PB):** 1,000 TB (Enterprise-scale data storage)
+
+---
+
+### Step-by-Step Example: Designing a Twitter Clone
+
+To see how this works in practice, let's calculate the capacity requirements for a simplified version of Twitter.
+
+#### Step 1: Establish Your Assumptions
+
+Before calculating anything, you must define the scale of the application and how users interact with it.
+
+* **Daily Active Users (DAU):** 50 million.
+* **Write Pattern:** Each user writes 2 tweets per day.
+* **Read Pattern:** Each user reads 10 tweets per day.
+* **Text Size:** A single tweet (text + metadata like timestamp and user ID) is **200 Bytes**.
+* **Media Size:** 10% of tweets contain an image, and the average image is **1 MB**.
+
+---
+
+#### Step 2: Calculate Traffic / QPS (Queries Per Second)
+
+QPS tells you how many web servers and load balancers you need to handle the incoming network traffic.
+
+**Write QPS:**
+
+
+$$\text{Total Daily Writes} = 50,000,000 \times 2 = 100,000,000 \text{ tweets/day}$$
+
+$$\text{Average Write QPS} = \frac{100,000,000}{100,000 \text{ seconds}} = 1,000 \text{ requests/second}$$
+
+**Read QPS:**
+
+
+$$\text{Total Daily Reads} = 50,000,000 \times 10 = 500,000,000 \text{ reads/day}$$
+
+$$\text{Average Read QPS} = \frac{500,000,000}{100,000 \text{ seconds}} = 5,000 \text{ requests/second}$$
+
+*Note: Traffic is never perfectly flat. People sleep at night and spike traffic during big events. Always calculate **Peak QPS** by multiplying your average by 2 or 3.*
+
+* **Peak Write QPS:** 2,000 RPS
+* **Peak Read QPS:** 10,000 RPS
+
+---
+
+#### Step 3: Calculate Storage Requirements
+
+Storage planning dictates your database architecture and tells you how much disk space you need over a 5-year lifecycle.
+
+**Daily Text Storage:**
+
+
+$$100,000,000 \text{ tweets} \times 200 \text{ Bytes} = 20,000,000,000 \text{ Bytes} = \textbf{20 GB/day}$$
+
+**Daily Media Storage:**
+Only 10% of the 100 million daily tweets have an image.
+
+
+$$10,000,000 \text{ images} \times 1 \text{ MB} = 10,000,000 \text{ MB} = \textbf{10 TB/day}$$
+
+**Total Storage Lifecycle:**
+
+* **1 Day:** ~10 TB (Media completely dwarfs text).
+* **1 Year:** $10 \text{ TB} \times 365 = \textbf{3,650 TB}$ (or ~3.6 PB).
+* **5 Years:** $3,650 \text{ TB} \times 5 = \textbf{18,250 TB}$ (or ~18.2 PB).
+
+*Conclusion:* 20 GB of text per day can easily fit into a standard PostgreSQL database. However, 18.2 PB of images over 5 years means you absolutely must offload images to an Object Storage system like AWS S3.
+
+---
+
+#### Step 4: Calculate Bandwidth Requirements
+
+Bandwidth tells you how much network capacity you need to pay for. It is split into **Ingress** (data flowing into your servers) and **Egress** (data flowing out to the users).
+
+**Ingress (Writes):**
+All 10 TB of daily storage must first travel into your network.
+
+
+$$\text{Average Ingress} = \frac{10 \text{ TB}}{100,000 \text{ seconds}} = \textbf{100 MB/second}$$
+
+**Egress (Reads):**
+To calculate egress, you need the average size of a read request. A read consists of 200 Bytes of text, plus a 10% chance of pulling a 1 MB image.
+
+
+$$\text{Average Read Size} = 200 \text{ Bytes} + (0.10 \times 1,000,000 \text{ Bytes}) \approx \textbf{100 KB}$$
+
+Now, multiply that by the 500 million daily reads we calculated in Step 2:
+
+
+$$\text{Total Daily Egress} = 500,000,000 \times 100 \text{ KB} = 50,000,000,000 \text{ KB} = \textbf{50 TB/day}$$
+
+$$\text{Average Egress Rate} = \frac{50 \text{ TB}}{100,000 \text{ seconds}} = \textbf{500 MB/second}$$
+
+*Conclusion:* Your outgoing network traffic is 5 times heavier than your incoming traffic. This proves mathematically why deploying a Content Delivery Network (CDN) to cache images at the edge is mandatory to save your core network from collapsing.
+
 
 ### Phase 2: How the Browser Verifies It (The Checkpoint)
 
@@ -791,6 +904,84 @@ WebSockets provide a full-duplex, **bidirectional** connection. Both the client 
 
 
 ![alt text](image-24.png)
+
+---
+
+While SSL/TLS encrypts the "pipe" so hackers cannot read your data in transit, it does absolutely nothing to verify *who* is actually sending the data. If a hacker connects to your API, SSL will happily encrypt their malicious attack.
+
+To protect your application logic, you need **Application-Level Security**.
+
+
+### 1. Authentication vs. Authorization
+
+In system design, these are two entirely different concepts, though they are often mistakenly used interchangeably.
+
+* **Authentication (AuthN):** Verifying *who* the user is. (e.g., Logging in with a username and password).
+* **Authorization (AuthZ):** Verifying *what* the user is allowed to do. (e.g., A normal user can read a post, but only an Admin can delete it).
+
+**The Analogy:**
+Authentication is the bouncer at a nightclub checking your ID to prove you are 21. Authorization is the bartender looking at the color of your wristband to decide if you are allowed into the VIP area.
+
+---
+
+### 2. JSON Web Tokens (JWT): Stateless Authentication
+
+**The Problem:** Historically, when a user logged in, the server created a `session_id`, saved it in a database or Redis cache, and gave it to the user. On every subsequent request, the server had to query the database to ask, *"Is this session_id valid?"* At a massive scale, this crushes your database with read queries.
+
+**The Solution:** JWTs allow you to do **stateless authentication**. The server doesn't need to remember the session at all.
+
+A JWT is like a digitally signed passport. It contains a JSON payload (e.g., `{"user_id": 123, "role": "admin"}`) that is cryptographically signed by the server's secret key.
+
+**The Step-by-Step Flow:**
+
+1. **The Login:** The user sends their username and password to the server.
+2. **The Creation:** The server verifies the password, creates a JSON object with the user's ID, and cryptographically signs it using a secret key only the server knows. It sends this JWT back to the client.
+3. **The Storage:** The client stores the JWT (usually in an `HttpOnly` cookie or LocalStorage).
+4. **The Next Request:** The client sends a request to fetch their profile, attaching the JWT in the HTTP Header (`Authorization: Bearer <token>`).
+5. **The Verification:** The server receives the token. It doesn't query a database. It simply runs a math function using its secret key to verify the signature. If the signature matches, the server inherently trusts the payload (`user_id: 123`) and processes the request.
+
+---
+
+### 3. OAuth 2.0 (Delegated Access)
+
+**The Problem:** Imagine you build an AI Resume Writer that needs to read a user's documents from Google Drive. You should *never* ask the user to type their Google password into your app. If your app gets hacked, their Google account is compromised.
+
+**The Solution:** OAuth 2.0. It is a protocol that allows a user to grant a 3rd-party application temporary access to their data without ever handing over their password.
+
+**The Step-by-Step Flow ("Sign in with Google"):**
+
+1. **The Redirect:** The user clicks "Import from Google Drive" in your AI app. Your app redirects the user's browser completely away from your app and over to `google.com`.
+2. **The Consent:** Google asks the user, *"This AI Resume app wants to read your files. Do you allow this?"*
+3. **The Grant:** The user clicks "Yes." Google generates a temporary string of characters called an **Access Token**.
+4. **The Return:** Google redirects the user back to your AI app, passing along the Access Token.
+5. **The API Call:** Your AI app makes a request to the Google Drive API, attaching the Access Token. Google sees the token, knows the user approved it, and sends the files. Your app never saw the user's password.
+
+---
+
+### 4. Rate Limiting (Protecting the API)
+
+Even if a user is perfectly authenticated and authorized, you cannot let them make 10,000 requests a second, or they will crash your servers (a DDoS attack) or rack up massive cloud billing costs.
+
+A Rate Limiter sits at your API Gateway and acts as a throttle.
+
+**The Two Most Common Algorithms:**
+
+**A. The Token Bucket (Best for bursty traffic):**
+
+* Imagine a bucket that holds exactly 10 tokens.
+* Every time a user makes an API request, they must take 1 token out of the bucket.
+* A background process drops 1 new token into the bucket every second.
+* If a user tries to make a request and the bucket is empty, the API Gateway immediately blocks them and returns an **HTTP 429 (Too Many Requests)** error.
+* *Why use it?* It allows users to make quick "bursts" of requests (like loading a heavy web page that triggers 10 rapid API calls), but stops sustained, high-speed abuse.
+
+**B. The Leaky Bucket (Best for smoothing traffic):**
+
+* Imagine a bucket with a hole in the bottom.
+* Requests pour into the top of the bucket at completely random, chaotic speeds.
+* However, the requests "leak" out of the bottom of the bucket and hit your servers at a constant, fixed rate (e.g., 5 requests per second).
+* If the bucket fills up to the top, any new incoming requests spill over the sides and are discarded.
+* *Why use it?* It protects fragile, slow backend legacy servers that absolutely cannot handle sudden spikes in traffic.
+
 
 ---
 
@@ -1234,6 +1425,70 @@ Schedule-driven invocation uses a timer to start the background task. Examples o
 
 ### iii. Returning Results
 Background jobs execute asynchronously in a separate process, or even in a separate location, from the UI or the process that invoked the background task. Ideally, background tasks are "fire and forget" operations, and their execution progress has no impact on the UI or the calling process. This means that the calling process does not wait for completion of the tasks. Therefore, it cannot automatically detect when the task ends.
+
+
+When you decouple your architecture using asynchronous background jobs, you need a middleman to hold the messages between your web servers and your workers. This middleman is the **Message Broker**.
+
+However, the industry splits message brokers into two entirely different architectural paradigms: **Message Queues** (like RabbitMQ) and **Event Streams** (like Apache Kafka).
+
+If you choose the wrong one, your system will either drop critical data or become impossibly complex to scale. Here is the deep dive for your notes.
+
+---
+
+## Message Broker
+### 1. Message Queues (RabbitMQ): The "To-Do List"
+
+A Message Queue is designed for **transient action**. It treats messages like tasks on a to-do list. Once a worker completes the task, the task is crossed off and destroyed forever.
+
+This is known as a **"Smart Broker, Dumb Consumer"** model. The broker (RabbitMQ) does all the heavy lifting of keeping track of who gets which message, ensuring fairness, and managing message routing.
+
+**The Core Concept:** Messages are deleted immediately after they are successfully processed.
+
+**Real-World Example:** Processing an e-commerce order (sending a receipt, charging a credit card). You only want this to happen exactly once.
+
+**The Step-by-Step Flow:**
+
+1. **Publish:** The web server publishes a message: `"Charge $50 to User A"`.
+2. **Queue:** RabbitMQ receives the message and places it in a specific queue.
+3. **Push:** RabbitMQ actively pushes this message to an available background worker.
+4. **Process & Acknowledge (ACK):** The worker charges the credit card. Once successful, the worker sends an "ACK" signal back to RabbitMQ.
+5. **Deletion:** The moment RabbitMQ receives the ACK, it permanently deletes the message from the queue. If a different microservice wants to know about that charge later, it is out of luck—the data is gone.
+
+---
+
+### 2. Event Streams (Kafka): The "Historical Ledger"
+
+An Event Stream is designed for **immutable history**. It treats messages like entries in a permanent ledger or a cassette tape. Data is appended to the end of a log, and it stays there for a configured amount of time (e.g., 7 days), regardless of who reads it.
+
+This is known as a **"Dumb Broker, Smart Consumer"** model. The broker (Kafka) is incredibly fast because it does almost no logic; it just saves data to disk. The consumers (workers) are responsible for keeping track of what they have and haven't read using a bookmark called an **Offset**.
+
+**The Core Concept:** Messages are *never* deleted when read. Multiple completely different services can read the exact same message at their own pace.
+
+**Real-World Example:** Tracking user clickstreams on a website. You want the Analytics service, the Fraud Detection service, and the Recommendation Engine to all process the exact same clicks independently.
+
+**The Step-by-Step Flow:**
+
+1. **Append:** The web server publishes an event: `"User A clicked on 'Shoes'"`.
+2. **Log:** Kafka simply appends this event to the end of a massive, sequential log file on its hard drive.
+3. **Independent Reading:**
+   * The **Analytics Worker** connects to Kafka, reads the event, and updates its internal "Offset" to remember where it left off.
+   * Two hours later, the **Recommendation Worker** wakes up. It connects to the exact same Kafka log, starts from its own saved Offset, and reads the exact same `"User A clicked on 'Shoes'"` event.
+
+
+4. **Retention:** The message remains safely on Kafka's hard drive until the global retention timer expires (e.g., after 7 days), at which point Kafka automatically deletes the oldest logs to free up space.
+
+---
+
+### At a Glance Comparison
+
+| Feature | Message Queue (RabbitMQ) | Event Stream (Kafka) |
+| --- | --- | --- |
+| **Primary Goal** | Task distribution (Do this thing once). | Data broadcasting (Here is a fact that happened). |
+| **Message Lifespan** | Deleted immediately after a successful ACK. | Persisted on disk for days or weeks. |
+| **Routing Logic** | Complex. Can route messages based on headers and rules. | Extremely simple. Just appends to a log. |
+| **Replayability** | **Impossible.** Once consumed, the data is gone forever. | **Built-in.** You can rewind your consumer's offset to yesterday and re-process old events. |
+| **Throughput** | ~50,000 messages per second. | Millions of messages per second. |
+
 
 ---
 ---
